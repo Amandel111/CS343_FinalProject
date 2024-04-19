@@ -11,31 +11,14 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"math"
 )
 
-//type RaftNode int
-
-type RaftNode struct {
-	mutex            sync.Mutex
-	selfID           int
-	myPort           string
-	currentTerm      int
-	peerConnections  []ServerConnection
-	electionTimeout  *time.Timer
-	status           string
-	votedFor         int
-	voteCount        int
-	log              []LogEntry
-	commitIndex      int
-	lastAppliedIndex int
-	nextIndex        []int // array for leader to keep track of which index the append entry to a follower's log
-}
-
 type VoteArguments struct {
-	Term         int
-	CandidateID  int
-	lastLogIndex int // candidate's last log entry
-	lastLogTerm  int // candidate's last log term
+	Term        int
+	CandidateID int
+	LastLogIndex int
+	LastLogTerm int
 }
 
 type VoteReply struct {
@@ -43,13 +26,15 @@ type VoteReply struct {
 	ResultVote bool
 }
 
+// What are these two structs
 type AppendEntryArgument struct {
 	Term         int
 	LeaderID     int
+	Entries      LogEntry
+	PrevLogEntry LogEntry
 	PrevLogIndex int
 	PrevLogTerm  int
-	Entries      []LogEntry
-	LeaderCommit int // maybe not need since not using commit index?
+	LeaderCommit int
 }
 
 type AppendEntryReply struct {
@@ -68,399 +53,495 @@ type LogEntry struct {
 	Term  int
 }
 
-var selfID int
-var serverNodes []ServerConnection
-var currentTerm int
-var votedFor int
-var electionTimeout *time.Timer
+type RaftNode struct {
+	selfID          int
+	serverNodes     []ServerConnection
+	currentTerm     int
+	votedFor        int
+	state           string // "follower", "candidate", "leader"
+	Mutex           sync.Mutex
+	electionTimeout *time.Timer
+	commitIndex     int
+	log             []LogEntry
+	nextIndex       map[int]int // nodeID: nodeIndex
+	matchIndex      map[int]int //use this for leader to know when majority of servers have replicated an entry
 
-const NUM_NODES = 5
+	//log can be a key value pair where key is log entry number and pair is the log entry
+	// {1: "log1", 2: "log2"}
+}
 
-// The RequestVote RPC as defined in Raft
-// Hint 1: Use the description in Figure 2 of the paper
-// Hint 2: Only focus on the details related to leader election and majority votes
-func (node *RaftNode) RequestVote(arguments VoteArguments, reply *VoteReply) error {
-	node.mutex.Lock()
-	defer node.mutex.Unlock()
+// This function is designed to emulate a client reaching out to the
+// server. Note that many of the realistic details are removed, for simplicity
+func (node *RaftNode) ClientAddToLog() {
+	// In a realistic scenario, the client will find the leader node and
+	//communicate with it. In this implementation, we are pretending that the client reached
+	//out to the server somehow
+	// But any new log entries will not be created unless the server /node is a leader
+	// isLeader here is a boolean to indicate whether the node is a leader or not
+	//for {
+		
+		//defer node.Mutex.Unlock()
+		//fmt.Println("node status is ", node.state, "it is the leader: ", node.state == "leader")
+		node.Mutex.Lock()
+		if node.state == "leader" {
+			// lastAppliedIndex here is an int variable that is needed by a node to store the value of the last index it used in the log
+			entry := LogEntry{len(node.log), node.currentTerm}
+			log.Println("Client communication created the new log entry at index " + strconv.Itoa(entry.Index))
 
-	fmt.Println(node.selfID, "recieved a vote request from", arguments.CandidateID)
-	//node.resetElectionTimeout()                                    //do we do this before or after we compare terms
-	if arguments.Term > node.currentTerm { //|| (arguments.Term == node.currentTerm && node.votedFor == -1) {// && node.votedFor == -1 { //reset votedFor at beginning of  //=> //do we get rid of node.votedFor?
-		fmt.Println("candidate has greater term, vote for candidate", arguments.CandidateID)
-		node.resetElectionTimeout()
-		// QUESTION: how can a node vote for 2 candidates (if the higher term one is the second candidate)
-		//step down
-		//node.votedFor = -1
-		//increment node term
-		//node.currentTerm = arguments.Term
+			// leader: add entry to log
+			node.log = append(node.log, entry)
+			fmt.Println("leader;s log after appending: ", node.log);
+			
 
-		//candidate has valid term numver, approve vote
-		node.votedFor = arguments.CandidateID
-		node.status = "follower"
-		fmt.Println("node ", node.selfID, " votes for a candidate other than itself")
-		reply.ResultVote = true
-		fmt.Println("node ", node.selfID, " votes for node ", node.votedFor)
+			//make local copy of currentTerm for safety
+			var tempCurrentTerm int
+			tempCurrentTerm = node.currentTerm 
+	
+			node.Mutex.Unlock()
 
-	} else if arguments.Term == node.currentTerm && node.votedFor == -1 {
-		fmt.Println("terms equal, node ", node.selfID, " vote for candidate ", arguments.CandidateID)
-		node.resetElectionTimeout()
-		//node.currentTerm = arguments.Term
-		node.status = "follower"
-		//candidate has valid term numver, approve vote
-		fmt.Println("node votes for a candidate other than itself")
-		node.votedFor = arguments.CandidateID
-		reply.ResultVote = true
-	} else { //ask christine if less than or equal to or just less than
-		//candidate has equal to or smaller term number, invalid
-		reply.ResultVote = false
-	}
+			for _, peer := range node.serverNodes {
 
-	reply.Term = node.currentTerm
+				followerPrevLogIndex := node.nextIndex[peer.serverID] - 1
+				fmt.Println("follower prev log index ", followerPrevLogIndex)
+				fmt.Println("leader entry ", node.log[followerPrevLogIndex+1])
 
-	return nil
+				var prevLogEntry LogEntry
+				//if log list has more than one element
+				if len(node.log)-1 != 0 {
+			 	prevLogEntry = node.log[followerPrevLogIndex]
+				}else{
+					//this case can be used to check if leader log is just starting, don't actually append this
+					prevLogEntry = LogEntry{-1, -1}
+				}
+				// 	fmt.Println("Passing")
+
+				// } else { // if log list is empty
+				// 	fmt.Println("PASSING EMPTY LOG 2")
+				// 	prevLogEntry = LogEntry{0, 0}
+				// }
+				//fmt.Println("Previous Log Entry: ", prevLogEntry)
+
+				fmt.Println("leader prev entry ", prevLogEntry)
+				//if peer.serverID != node.selfID {
+				if len(node.log)-1 >= node.nextIndex[peer.serverID] { //follower is not up to date
+					// Construct arguments for AppendEntry RPC call
+					args := AppendEntryArgument{
+						Term:         tempCurrentTerm, //node.currentTerm,
+						LeaderID:     node.selfID,
+						Entries:      node.log[followerPrevLogIndex+1],
+						PrevLogEntry: prevLogEntry,
+						LeaderCommit: node.commitIndex,
+					}
+
+
+					// Create a reply variable to store the response
+					var reply AppendEntryReply
+
+					// Call AppendEntry RPC on the peer
+					
+					//node.Mutex.Lock()
+					err := peer.rpcConnection.Call("RaftNode.AppendEntry", args, &reply)
+					//node.Mutex.Unlock()
+					if err != nil {
+						//node.Mutex.Lock()
+						fmt.Printf("Error calling AppendEntry in Client to node %d: %v\n", peer.serverID, err)
+						//node.Mutex.Unlock()
+						// Handle the error appropriately, e.g., mark the peer as unreachable
+					} else {
+						for !reply.Success {
+							//if the rpc failed, two cases: either this is not the leader node, or follower node's log is inconsistent
+							
+							
+							//fmt.Println("log entry appending failed for node ", peer.serverID, "try again")
+							
+							if node.currentTerm < reply.Term{
+								node.Mutex.Lock()
+								//leader is out of date
+								fmt.Println("leader out of date")
+								node.transitionToFollower()
+								node.votedFor = -1
+								node.currentTerm = reply.Term
+								node.resetElectionTimeout()
+								node.Mutex.Unlock()
+								return
+							}else{
+								go func() {
+									//the follower node's log is inconsistent, decrement nextIndex
+									node.nextIndex[peer.serverID] -= 1
+
+									//set argument up
+									followerPrevLogIndex := node.nextIndex[peer.serverID] - 1
+									fmt.Println("follower prev log index ", followerPrevLogIndex)
+									fmt.Println("leader entry ", node.log[followerPrevLogIndex+1])
+					
+									var prevLogEntry LogEntry
+									//if log list has more than one element
+									if len(node.log)-1 != 0 {
+									prevLogEntry = node.log[followerPrevLogIndex]
+									}else{
+										//this case can be used to check if leader log is just starting, don't actually append this
+										prevLogEntry = LogEntry{-1, -1}
+									}
+
+									//if len(node.log)-1 >= node.nextIndex[peer.serverID] { //follower is not up to date
+										// Construct arguments for AppendEntry RPC call
+										args := AppendEntryArgument{
+											Term:         tempCurrentTerm,
+											LeaderID:     node.selfID,
+											Entries:      node.log[followerPrevLogIndex+1],
+											PrevLogEntry: prevLogEntry,//node.log[followerPrevLogIndex], //prevLogEntry, //fix this so that second argument makes sense
+											LeaderCommit: node.commitIndex,
+										}
+									
+								
+									err := peer.rpcConnection.Call("RaftNode.AppendEntry", args, &reply)
+									fmt.Print("called rpc in ClientCall");
+									if err != nil {
+										fmt.Printf("Error calling AppendEntry in Client to node %d: %v\n", peer.serverID, err)
+									}
+								}()
+												
+							}
+						}
+						//append worked, increment nextIndex
+						fmt.Print("append entry returned success")
+						node.Mutex.Lock()
+						node.nextIndex[peer.serverID] += 1
+						node.matchIndex[peer.serverID] += 1
+						node.Mutex.Unlock()
+					}
+						/*} else {
+							//append worked, increment nextIndex
+							fmt.Print("append entry returned success")
+							node.nextIndex[peer.serverID] += 1
+							node.matchIndex[peer.serverID] += 1
+						}*/
+				}
+			}
+			
+			//if majority ovtes yes, check in same way as leader election
+			//node.commitIndex += 1
+			//var int totalReplicated 
+			totalReplicated := 0 
+			fmt.Println("Initialized totalReplicated")
+			node.Mutex.Lock()
+			if (len(node.log) - 1 > node.commitIndex ){
+				fmt.Printf("there is an unbcommitted log")
+				//there is an uncomitted entry
+				for _, replicatedIndex := range node.matchIndex {
+					if (replicatedIndex >= len(node.log) -1) && node.log[len(node.log) - 1].Term == tempCurrentTerm{//node.currentTerm{
+						totalReplicated++
+					}
+				}
+			}
+
+			if totalReplicated > len(node.serverNodes)/2 {
+				fmt.Printf("Leader got majority replicated logs")
+				node.commitIndex = len(node.log) - 1
+			}
+			node.Mutex.Unlock()
+		}else {
+			// If the node is no longer the leader, stop sending heartbeats
+			fmt.Println("node is not the leader, don't call clientCall")
+			//return
+		}
+		//time.Sleep(40 * time.Millisecond) //40
 }
 
 // The AppendEntry RPC as defined in Raft
 // Hint 1: Use the description in Figure 2 of the paper
 // Hint 2: Only focus on the details related to leader election and heartbeats
-func (followerNode *RaftNode) AppendEntry(arguments AppendEntryArgument, reply *AppendEntryReply) error {
-	fmt.Println("followernode", followerNode.log)
-	// if leader's term is less than follower node's term
-	if arguments.Term < followerNode.currentTerm {
-		fmt.Println("leader term less than follower node term")
+func (node *RaftNode) AppendEntry(arguments AppendEntryArgument, reply *AppendEntryReply) error {
+
+	// check the term that is coming in
+
+	node.Mutex.Lock()
+	defer node.Mutex.Unlock()
+	//fmt.Println("heartbeat from", arguments.LeaderID)
+	//fmt.Println("arguments to AppendEntry for node ", node.selfID, " : ", arguments)
+	// Check if the leader's term is less than receiving
+	if arguments.Term < node.currentTerm {
+		// Reply false if leader's term is older
+		fmt.Println("leader's term is outdated")
+		reply.Term = node.currentTerm
 		reply.Success = false
-		reply.Term = followerNode.currentTerm // so that reply has most updated term
-		return nil
-	} else { // no other issues so update follower node's info so they know who the leader is
-		//followerNode.currLeaderID = arguments.LeaderID
-		// NOTE: handles case where dead leader comes back to life and recognized that it's not the leader anymore
-		followerNode.status = "follower"
-		// followers receiving heartbeats from leader so it resets its election timer since it knows leader is alive
-		followerNode.resetElectionTimeout()
-	}
 
-	// in order to reply with a success for appendentry we need to make sure follower's log is consistent with leader's log
-	// check if its a heartbeat
-	if arguments.PrevLogIndex != -1 { // if not a heartbeat
-		fmt.Println("not a heartbeat")
-		fmt.Println("appending entry", arguments.Entries)
-		fmt.Println("appending entry", arguments.Entries[0])
-		fmt.Println("appending entry", arguments.Entries[len(arguments.Entries)-1].Index+1)
-		// length of leader log is arguments.Entries[len(arguments.Entries)-1].Index +1
-		if len(followerNode.log) > arguments.Entries[len(arguments.Entries)-1].Index+1 { // rn its 1 0
-			fmt.Println("follower log is longer", len(followerNode.log), arguments.Entries[len(arguments.Entries)-1].Index+1)
-			fmt.Println("followerNode", followerNode.log)
-			fmt.Println("leader log", arguments.Entries)
-			// if follower's log is longer than leader's log, delete everything from PrevLogIndex
-			followerNode.log = followerNode.log[0 : arguments.Entries[len(arguments.Entries)-1].Index+1]
-			// reply false bc we still need to find the latest matching entry in follower log
-			reply.Success = false
-			return nil
-			//followerNode.log = append(followerNode.log, arguments.Entries...)
-		} else if len(followerNode.log) < arguments.Entries[len(arguments.Entries)-1].Index+1 { // RN ITS 0 0
-			fmt.Println("follower log is shorter than leader log", len(followerNode.log), arguments.Entries[len(arguments.Entries)-1].Index+1)
-			// follower log is shorter than leader log
-			// TODO: check this logic - does clientaddtolog function take care of this?
-			reply.Success = false
-			return nil
-		}
-		fmt.Println("same length")
-		//fmt.Println("length is equal")
-		// by now, follower's log is same length as leader's log - so check terms to see if it matches
-		// NOTE: added length != 0 to prevent index out of range error
-		//fmt.Println("follower Node last applied index", followerNode.log[followerNode.lastAppliedIndex].Term)
-		// check not -1 because then it will be empty and can append whatever
-		if followerNode.lastAppliedIndex == -1 {
-			followerNode.log = append(followerNode.log, arguments.Entries...)
-			followerNode.lastAppliedIndex++
-		} else if followerNode.log[followerNode.lastAppliedIndex].Term != arguments.Entries[followerNode.lastAppliedIndex].Term {
-			fmt.Println("terms don't match, follower log", followerNode.log[followerNode.lastAppliedIndex].Term, "leader log", arguments.Entries[followerNode.lastAppliedIndex].Term)
-			// terms don't match - so in clientaddtolog, we will decrement nextIndex and try again to find
-			// the most recent index of the follower's log where the term matches the leader's term at that index
-			reply.Success = false
-			return nil
-		} else {
-			// if there is match - follower is consistent so append the new entry
-			// NOTE: i think we need to append everything from next index to the new entry (to handle cases
-			// where we find a matching log entry in the follower that is further behind the log) unless
-			// we can worry about one entry at a time?
-			followerNode.log = append(followerNode.log, arguments.Entries...)
-			followerNode.lastAppliedIndex++
-		}
+	} else {
+		//fmt.Print("correct leader in append argument RPC")
+		
+			//fmt.Print("this is a call from Append and not heartbeat")
+			// Update term to match the leader's term and transition to follower state
+			node.currentTerm = arguments.Term
+			//fmt.Println("arguments to AppendEntry for node ", node.selfID, " : ", arguments)
+		if (arguments.Entries.Term == -1){
+			//this is the heartbeat
+			// Reset the election timeout as the leader is now active
+			node.resetElectionTimeout()
+			node.transitionToFollower()
+		} else{
+			fmt.Println("arguments to AppendEntry for node ", node.selfID, " : ", arguments)
+			fmt.Println("in term ", arguments.Term, "passed entry: ", arguments.Entries)
+
+			// Reply to the leader with success
+			reply.Term = node.currentTerm
+
+			//base case, list is empty
+			if len(node.log) == 0 {
+				//empty log, append entries
+				// is it a heartbeat or what (if entry is)
+				if (arguments.PrevLogEntry.Term) == -1{
+					//this is the case where the leader just started new log
+					fmt.Println("Log is empty")
+					node.log = append(node.log, arguments.Entries)
+					node.commitIndex = int(math.Min(float64(arguments.Entries.Index), float64(arguments.LeaderCommit)))
+					reply.Success = true
+				}else{
+					//leader has more than one entry so follower is behind
+					reply.Success = false
+				}
+
+			} else if (len(node.log) - 1) < arguments.PrevLogEntry.Index {
+				//this is if the log doesn't contain an entry at prevLogIndex
+				reply.Success = false
+				fmt.Print("the follower log does not contain an entry at prevLogIndex ", arguments.PrevLogEntry.Index)
+			} else if (len(node.log) - 1) > arguments.PrevLogEntry.Index {
+				//the follower's log has too many entries
+				fmt.Println("LOG IS TOO LONG FOR NODE ", node.selfID)
+				fmt.Println("arguments.PrevLogEntry.Index", arguments.PrevLogEntry.Index);
+				//delete any logs that are at a higher index that prevLogIndex,
+				//node.log = node.log[0:node.log[prevLogIndex -1]] //delete that entry and all that follow
+				if node.log[arguments.PrevLogEntry.Index].Term != arguments.PrevLogEntry.Term {
+					//node.log = node.log[0 : arguments.PrevLogIndex-1] //delete that entry and all that follow
+					fmt.Print("previous index is wrong in this long log")
+					node.log = node.log[0 : len(node.log) - 1]
+					reply.Success = false
+				}
+			} else if (len(node.log) - 1) == arguments.PrevLogEntry.Index { //length of node log is at least as up to date as leader's
+				fmt.Println("LOG IS CORRECT LENGTH FOR NODE ", node.selfID)
+				fmt.Println("node's prev term ",  node.log[arguments.PrevLogEntry.Index].Term , " and leader's prevLogTerm ", arguments.PrevLogTerm, "and node's log ", node.log)
+				if node.log[arguments.PrevLogEntry.Index].Term != arguments.PrevLogEntry.Term {
+					fmt.Println("LOG HAS WRONG TERM ENTRY FOR NODE ", node.selfID)
+					//node.log = node.log[0 : arguments.PrevLogIndex-1] //#delete that entry and all that follow //index error here
+					node.log = node.log[0 : len(node.log) - 1]
+					reply.Success = false
+				} else {
+					//append new entries in log
+					fmt.Println("APPENDING SUCCEEDS FOR NODE ", node.selfID)
+					node.log = append(node.log, arguments.Entries)
+					node.commitIndex = int(math.Min(float64(arguments.Entries.Index), float64(arguments.LeaderCommit)))
+					reply.Success = true
+				}
+			}
+
+			//fmt.Println("NODE ", node.selfID, "'S LOG: ", node.log)
 	}
-	fmt.Println("reply true")
-	reply.Success = true
+}
 	return nil
-
 }
 
-// This function is designed to emulate a client reaching out to the
-// server. Note that many of the realistic details are removed, for
-// simplicity
-func (leaderNode *RaftNode) ClientAddToLog() {
-	// In a realistic scenario, the client will find the leader node and
-	// communicate with it
-	// In this implementation, we are pretending that the client reached
-	// out to the server somehow
-	// But any new log entries will not be created unless the server /
-	// node is a leader
-	// isLeader here is a boolean to indicate whether the node is a leader
-	// or not
-	successfulAppendsCount := 0 // to check for majority appends for an entry to update leader's commit index
-	if leaderNode.status == "leader" {
-		// lastAppliedIndex here is an int variable that is needed by a node
-		// to store the value of the last index it used in the log
-		var entries []LogEntry
-		entry := LogEntry{Index: leaderNode.lastAppliedIndex, Term: currentTerm}
-		entries = append(entries, entry)
-		log.Println("Client communication created the new log entry at index " + strconv.Itoa(entry.Index))
-		// NOTE FOR LATER: why do we need to entries as an array? is it possible its creating duplicates? since every add to client will just be one entry>?
-		// Add rest of logic here
-		// HINT 1: using the AppendEntry RPC might happen here
-		for _, entry := range entries {
-			leaderNode.log = append(leaderNode.log, entry)
-		}
-		leaderNode.log = append(leaderNode.log, entry)
-		leaderNode.lastAppliedIndex++
-		log.Println("Client communication created the new log entry at index " + strconv.Itoa(entry.Index))
-		// prepare AppendEntry RPC arguments for the follower nodes
-		args := AppendEntryArgument{Term: leaderNode.currentTerm, LeaderID: leaderNode.selfID, PrevLogIndex: leaderNode.lastAppliedIndex, PrevLogTerm: leaderNode.log[leaderNode.lastAppliedIndex].Term, Entries: entries}
 
-		var reply AppendEntryReply
-		for _, server := range leaderNode.peerConnections {
-			fmt.Println("sending to", server.Address)
-			err := server.rpcConnection.Call("RaftNode.AppendEntry", args, &reply)
-			go func() {
-				for reply.Success == false {
-					fmt.Println("reply false")
-					// reset entries for follower
-					entries = entries[len(entries)-1:]
-					fmt.Println("entries", entries)
-					// grab correct indexes and entries to send out here
-					//args = AppendEntryArgument{Term: leaderNode.currentTerm, LeaderID: leaderNode.selfID, PrevLogIndex: leaderNode.lastAppliedIndex, PrevLogTerm: leaderNode.log[leaderNode.lastAppliedIndex].Term, Entries: entries}
-					err = server.rpcConnection.Call("RaftNode.AppendEntry", args, &reply) // follower node's append entry
-					if err != nil {
-						fmt.Println("Error appending entry to node with address: ", server.Address)
-					}
-					if reply.Term > leaderNode.currentTerm { // reply was false because leader was not up to date
-						fmt.Println("leader not up to date")
-						leaderNode.status = "follower"
-						leaderNode.votedFor = -1
-						leaderNode.currentTerm = reply.Term
-						// add a timer for leader that steps down (or see how to reset leader election timer)
-						// NOTE can call here
-						leaderNode.resetElectionTimeout()
-						break
-					}
-					if reply.Success == true {
-						fmt.Println("Successful AppendEntry to follower node with server address: ", server.Address)
-						successfulAppendsCount++
-						break // break from inside 'while' loop
-					} else {
-						// reply was false so follower log was shorter or the term at PrevLogIndex was not matching leader's
-						// need to find the latest matching term in follower's log and append the leader's entries from that point on
-						fmt.Println("leader node next index", leaderNode.nextIndex)
-						leaderNode.nextIndex[server.serverID]-- // update follower's next index in the leader's array (index of array is id of follower node)
-						indexToApplyInFollower := leaderNode.nextIndex[server.serverID]
-						prevIndexInFollower := indexToApplyInFollower - 1 // getting the previous index to check follower's log
-						olderEntry := LogEntry{Index: indexToApplyInFollower, Term: leaderNode.log[indexToApplyInFollower].Term}
-						// append the new entry to the front of the existing entries array so that follower log can simply append from leader's older log entries (that its missing) to the new entry
-						// Create a slice to hold the updated entries
-						entries = append([]LogEntry{olderEntry}, entries...)
-						//args = AppendEntryArgument{Term: leaderNode.currentTerm, LeaderID: leaderNode.selfID, PrevLogIndex: prevIndexInFollower, PrevLogTerm: leaderNode.log[prevIndexInFollower].Term, Entry: entry}
-						args = AppendEntryArgument{Term: leaderNode.currentTerm, LeaderID: leaderNode.selfID, PrevLogIndex: prevIndexInFollower, PrevLogTerm: leaderNode.log[prevIndexInFollower].Term, Entries: entries}
-					}
-				}
-			}()
+// The RequestVote RPC as defined in Raft
+// Hint 1: Use the description in Figure 2 of the paper
+// Hint 2: Only focus on the details related to leader election and majority votes
+func (node *RaftNode) RequestVote(arguments VoteArguments, reply *VoteReply) error {
+	// Locking to prevent race conditions
+	node.Mutex.Lock()
+	defer node.Mutex.Unlock()
+	fmt.Printf("Node %d received vote request from Node %d with term %d\n", node.selfID, arguments.CandidateID, arguments.Term)
 
-		}
+	//fmt.Println("receiving node's log: ", node.log)
+
+	receiverLastLogTerm := -1
+	receiverLastLogIndex := -1
+	if (len(node.log)-1 > 0){
+		receiverLastLogTerm = node.log[len(node.log)-1].Term
+		receiverLastLogIndex = len(node.log)-1
 	}
-	// HINT 2: force the thread to sleep for a good amount of time (less
-	// than that of the leader election timer) and then repeat the actions above.
-	// You may use an endless loop here or recursively call the function
-	// HINT 3: you don’t need to add to the logic of creating new log
-	// entries, just handle the replication
+	// Check that the term of the requester is higher
+	if arguments.Term > node.currentTerm && (arguments.LastLogIndex >= receiverLastLogIndex) && (arguments.LastLogTerm >= receiverLastLogTerm){
+		node.currentTerm = arguments.Term // receiver node will update current term to match canddiate's term
+		node.votedFor = -1                // reset this count since candidate's term is larger
+
+		// Acknowledging vote or not to the candidate
+		reply.Term = node.currentTerm
+		reply.ResultVote = true               // receiver node will vote yes
+		node.votedFor = arguments.CandidateID // Vote for the candidate
+		fmt.Printf("Node %d voted for Node %d in term %d\n", node.selfID, arguments.CandidateID, arguments.Term)
+
+	} else {
+		fmt.Println(node.selfID, " at term ", node.currentTerm, " rejected vote")
+		reply.Term = node.currentTerm
+		reply.ResultVote = false // Vote not granted
+	}
+	return nil
+}
+
+// resetting the election timeout to a random duration
+func (node *RaftNode) resetElectionTimeout() {
+	fmt.Println("reset timer for node ", node.selfID)
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	duration := time.Duration(r.Intn(150)+150) * time.Millisecond
+	//if node.electionTimeout != nil {
+	//	node.electionTimeout.Stop()
+	//}
+	node.electionTimeout.Stop()
+	node.electionTimeout.Reset(duration)
+	// used when transitioning to candidate state
+	// node.electionTimeout = time.AfterFunc(duration, func() {
+	// 	node.transitionToCandidate()
+	// })
+}
+
+func (node *RaftNode) transitionToFollower() {
+	fmt.Println("node ", node.selfID, "transitions to follwoer")
+	node.state = "follower"
+}
+
+func (node *RaftNode) transitionToCandidate() {
+	node.state = "candidate"
+	node.votedFor = node.selfID
+	// node.resetElectionTimeout()
+}
+
+func (node *RaftNode) transitionToLeader() {
+	fmt.Println("node ", node.selfID, "transitions to leader")
+	node.state = "leader"
+	node.resetElectionTimeout() // Reset the election timeout since the node is now leader
+	// Initialize variables
+
+	for _, peer := range node.serverNodes {
+		node.nextIndex[int(peer.serverID)] = len(node.log) //+ 1
+		node.matchIndex[peer.serverID] = 0
+	}
+	go Heartbeat(node, node.serverNodes)
+	go node.ClientAddToLog()
+
 }
 
 // You may use this function to help with handling the election time out
 // Hint: It may be helpful to call this method every time the node wants to start an election
 func (node *RaftNode) LeaderElection() {
-	fmt.Println("nominate self as candidate. node:", node.selfID)
-	//increment current term and status
-	node.currentTerm += 1
-	node.status = "candidate"
-
-	// vote for itself
-	node.voteCount += 1
+	node.transitionToCandidate()
+	// not do anything until timer timesout
+	fmt.Printf("Node %d starts leader election\n", node.selfID)
+	node.Mutex.Lock()
+	node.currentTerm++
 	node.votedFor = node.selfID
+	node.Mutex.Unlock()
 
-	// send election
-	arguments := VoteArguments{
-		Term:         node.currentTerm,
-		CandidateID:  node.selfID,
-		lastLogIndex: node.lastAppliedIndex,
-		lastLogTerm:  node.currentTerm,
+	fmt.Print("candidate log: ", node.log)
+	fmt.Print("candidate log length: ", len(node.log))
+	lastLogIndex := -1
+	lastLogTerm := -1
+	if len(node.log)-1 > 0 {
+		fmt.Println("THE LENGTH OF THE LOG IS NOT ZERO")
+		lastLogIndex = len(node.log) - 1
+		lastLogTerm = node.log[len(node.log) - 1].Term
 	}
 
-	//wait groups
-	var waitgroup sync.WaitGroup
+	// node stops receiving heartbeats, notices something is wrong
+	arguments := VoteArguments{
+		Term:        node.currentTerm,
+		CandidateID: node.selfID,
+		LastLogIndex: lastLogIndex,
+		LastLogTerm: lastLogTerm,
+	}
+	var reply VoteReply
+	// Count of received votes
+	votesReceived := 1
 
-	//potential term number to update our candidate node if it is behind
-	updateTerm := node.currentTerm
-	//fmt.Println("peer connections ", node.peerConnections, " for node ", node.selfID)
-	for _, peerNode := range node.peerConnections {
-		fmt.Println("requesting from node", peerNode)
-		waitgroup.Add(1)
+	// sending nil as vote, but how do we handle that, what do I pass?
+	fmt.Printf("Node %d requests votes for term %d\n", node.selfID, arguments.Term)
+
+	var wg sync.WaitGroup
+	// Start vote requests to other nodes
+	for _, server := range node.serverNodes {
+		wg.Add(1)
 		go func(server ServerConnection) {
-			defer waitgroup.Done()
-			var reply VoteReply
-			//var err string
-			//var connectionError = "connection is shut down"
+			defer wg.Done()
 			err := server.rpcConnection.Call("RaftNode.RequestVote", arguments, &reply)
 			if err != nil {
-				//nothing happens, failed
+				fmt.Printf("Error sending vote request to node %d: %v\n", server.serverID, err)
+				return
 			}
-			//var currErr = err.Error()
-			//if connectionError == currErr {
-			// 	fmt.Println("true")
-			// 	return
-			// }
-			//for err != nil {
-			//err = server.rpcConnection.Call("RaftNode.RequestVote", arguments, &reply)
-			//}
-			//fmt.Println("candidate ", node.selfID, " gets response: ", reply);
-			if reply.ResultVote {
-				//fmt.Print("node votes yes")
-				node.voteCount += 1
-			} else {
-				if reply.Term > updateTerm {
-					updateTerm = reply.Term
-				}
+			if reply.Term > node.currentTerm {
+				node.Mutex.Lock()
+				node.currentTerm = reply.Term
+				node.votedFor = -1
+				node.Mutex.Unlock()
+				return
 			}
-		}(peerNode)
+			if reply.Term == node.currentTerm && reply.ResultVote {
+				node.Mutex.Lock()
+				votesReceived++
+				node.Mutex.Unlock()
+			}
+		}(server)
 	}
-	waitgroup.Wait()
-	// move this up?? NOTE to fix
-	fmt.Println("candidate ", node.selfID, " got ", node.voteCount, " votes")
-	if float64(node.voteCount)/float64(NUM_NODES) > 0.5 {
-		fmt.Println("confirmed leader")
-		node.status = "leader"
-		Heartbeat(node)
-		node.ClientAddToLog()
+	wg.Wait()
+
+		if votesReceived > len(node.serverNodes)/2 {
+			node.Mutex.Lock()
+			fmt.Printf("Node %d becomes leader for term %d\n", node.selfID, node.currentTerm)
+			node.Mutex.Unlock()
+			node.transitionToLeader()
+
 	} else {
-		node.votedFor = -1
-		node.status = "follower"
-		fmt.Println("not enough votes- restart election again")
-		//update node term, updateTerm will be node.currentTerm unless node.currentTerm is out of date
-		node.currentTerm = updateTerm
+		fmt.Printf("Node %d failed to become leader for term %d\n", node.selfID, node.currentTerm)
+		node.transitionToFollower()
 	}
-	node.voteCount = 0
 
 }
-
-/* TODO:
-reset votedFor
-test with failures by making noes go to sleep randomly
-*/
 
 // You may use this function to help with handling the periodic heartbeats
 // Hint: Use this only if the node is a leader
-func Heartbeat(node *RaftNode) {
-	fmt.Println("heartbeat called")
+func Heartbeat(node *RaftNode, peers []ServerConnection) {
+	for { // infinite loop
+		// Lock the node's state for consistency
+		node.Mutex.Lock()
 
-	//start a heartbeat timer
-	//node.electionTimeout = time.NewTimer(10 * time.Millisecond)
+		// Check if the node is the leader
+		if node.state == "leader" && node.votedFor == node.selfID {
+			// Unlock the node's state before sending heartbeats
+			node.Mutex.Unlock()
 
-	go func() {
-		var counter = 0
-		for {
-			node.electionTimeout = time.NewTimer(10 * time.Millisecond)
-			counter += 1
-			//thread for each node checking for timeout
-			<-node.electionTimeout.C
+			// If the node is the leader, it'll send a heartbeat message to all other nodes
+			for _, peer := range peers {
+				//if peer.serverID != node.selfID {
+				// Construct arguments for AppendEntry RPC call
+				args := AppendEntryArgument{
+					Term:         node.currentTerm,
+					LeaderID:     node.selfID,
+					Entries:      LogEntry{-1, -1},
+					PrevLogEntry: LogEntry{-1, -1},
+					LeaderCommit: 0,
+				}
 
-			// Printed when timer is fired
-			fmt.Println("heartbeat timer fired send heartbeat", node.selfID, counter)
+				// Create a reply variable to store the response
+				var reply AppendEntryReply
 
-			//send heartbeat via appendentries
-			arguments := AppendEntryArgument{
-				Term:         node.currentTerm,
-				LeaderID:     node.selfID,
-				Entries:      make([]LogEntry, 0), // Initialize an empty slice of LogEntry,
-				PrevLogIndex: -1,
-				PrevLogTerm:  -1,
+				// Call AppendEntry RPC on the peer
+				err := peer.rpcConnection.Call("RaftNode.AppendEntry", args, &reply)
+				if err != nil {
+					fmt.Printf("Error sending heartbeat to node %d: %v\n", peer.serverID, err)
+					// Handle the error appropriately, e.g., mark the peer as unreachable
+				} else {
+					fmt.Printf("Sent heartbeat to node %d\n", peer.Address)
+				}
+				//}
 			}
-			//var waitgroup sync.WaitGroup
-			for _, peerNode := range node.peerConnections {
-				//waitgroup.Add(1)
-				/*go*/
-				func(server ServerConnection) {
-					//defer waitgroup.Done()
-					var reply AppendEntryReply
-					err := server.rpcConnection.Call("RaftNode.AppendEntry", arguments, &reply)
-					if err != nil {
-						//return
-					} else {
-						if !reply.Success {
-							fmt.Println("reply", reply, "port", peerNode)
-							//update old leader's term
-							node.votedFor = -1
-							if node.currentTerm < reply.Term {
-								node.currentTerm = reply.Term
-							}
-							node.status = "follower"
-							fmt.Println("step down", node.selfID)
-							return
-						}
-					}
-					//fmt.Print("reply from append entry: ", reply);
-				}(peerNode)
-			}
-			//waitgroup.Wait()
-
-			//start a heartbeat timer
-			//node.electionTimeout = time.NewTimer(10 * time.Millisecond)
-			// UNCOMMENT THE IF STATEMENT TO TEST NODE SLEEP AND COMING BACK
-			// if counter == 20 {
-			// 	fmt.Println("sleep started", node.selfID)
-			// 	time.Sleep(10 * time.Second)
-			// 	fmt.Println("woke up")
-			// }
+		} else {
+			// If the node is no longer the leader, stop sending heartbeats
+			node.Mutex.Unlock()
+			return
 		}
-	}()
-
-}
-
-// will initiate a timer for the node passed to it
-func StartTimer(node *RaftNode) {
-	//node.mutex.Lock() //dont need to protect because it will be reset every time a node reaches out to it
-	//defer node.mutex.Unlock()
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	tRandom := time.Duration(r.Intn(150)+151) * time.Millisecond
-	node.electionTimeout = time.NewTimer(tRandom)
-	//fmt.Println("Timer started")
-}
-
-// resetElectionTimeout resets the election timeout to a new random duration.
-// This function should be called whenever an event occurs that prevents the need for a new election,
-// such as receiving a heartbeat from the leader or granting a vote to a candidate.
-func (node *RaftNode) resetElectionTimeout() {
-	// node.mutex.Lock()
-	// defer node.mutex.Unlock()
-
-	//fmt.Println("node ", node.selfID, " reset its timer")
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	//fmt.Println("created new")
-	duration := time.Duration(r.Intn(150)+151) * time.Millisecond
-	//fmt.Println("random duration")
-	node.electionTimeout.Stop() // Use Reset method only on stopped or expired timers
-	//fmt.Println("timeout stop")
-	node.electionTimeout.Reset(duration) // Resets the timer to new random value
-	// NOTE SEGMENTATION FAULT COMING FROM TIMER
-	//fmt.Println("finished reseting election timeout")
+		
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func main() {
+
 	// The assumption here is that the command line arguments will contain:
 	// This server's ID (zero-based), location and name of the cluster configuration file
 	arguments := os.Args
@@ -480,17 +561,6 @@ func main() {
 	}
 	defer file.Close()
 
-	node := &RaftNode{
-		selfID:           myID,
-		mutex:            sync.Mutex{},
-		currentTerm:      0,
-		status:           "follower",
-		votedFor:         -1,
-		lastAppliedIndex: -1,
-		log:              make([]LogEntry, 0), // Initialize an empty slice of LogEntry
-		commitIndex:      0,
-		nextIndex:        make([]int, 0),
-	}
 	myPort := "localhost"
 
 	// Read the IP:port info from the cluster configuration file
@@ -503,7 +573,6 @@ func main() {
 		log.Printf(text, index)
 		if index == myID {
 			myPort = text
-			node.myPort = myPort
 			index++
 			continue
 		}
@@ -516,16 +585,28 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// initialize parameters
+	node := &RaftNode{
+		selfID:      myID,
+		currentTerm: 0,
+		state:       "follower",
+		votedFor:    -1,
+		Mutex:       sync.Mutex{},
+		commitIndex: 0,
+		log:         make([]LogEntry, 0),
+		nextIndex:   make(map[int]int),
+		matchIndex:  make(map[int]int),
+	}
+
 	// Following lines are to register the RPCs of this object of type RaftNode
 	//api := new(RaftNode)
-	//err = rpc.Register(api)
 	err = rpc.Register(node)
 	if err != nil {
 		log.Fatal("error registering the RPCs", err)
 	}
 	rpc.HandleHTTP()
-	go http.ListenAndServe(node.myPort, nil)
-	log.Printf("serving rpc on port" + node.myPort)
+	go http.ListenAndServe(myPort, nil)
+	log.Printf("serving rpc on port" + myPort)
 
 	// This is a workaround to slow things down until all servers are up and running
 	// Idea: wait for user input to indicate that all servers are ready for connections
@@ -549,18 +630,24 @@ func main() {
 		// If connection is not established
 		for err != nil {
 			// Record it in log
-			log.Println("Trying again. Connection error: ", err)
+			// log.Println("Trying again. Connection error: ", err)
 			// Try again!
 			client, err = rpc.DialHTTP("tcp", element)
 		}
 		// Once connection is finally established
 		// Save that connection information in the servers list
-		serverNodes = append(serverNodes, ServerConnection{index, element, client})
-		//fmt.Println("serverNodes:", serverNodes)
+		node.serverNodes = append(node.serverNodes, ServerConnection{index, element, client})
 		// Record that in log
 		fmt.Println("Connected to " + element)
 	}
-	node.peerConnections = serverNodes
+
+	/*
+		**NOTES: Can we save the connections in a map?
+		How do we make more than one node initialize the election? Is that something we have to implement?
+		For now, let's just assume only one starts the election
+	*/
+
+	// call leader election like in peer-pressure, and add the logic in it
 
 	// Once all the connections are established, we can start the typical operations within Raft
 	// Leader election and heartbeats are concurrent and non-stop in Raft
@@ -570,22 +657,44 @@ func main() {
 	// Hint 3: After this point, the threads should take over
 	// Heads up: they never will be done!
 	// Hint 4: wg.Wait() might be helpful here
+	// go node.startElectionTimer()
 
-	StartTimer(node)
+	//start a timer for every node
+
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	tRandom := time.Duration(r.Intn(150)+151) * time.Millisecond
+	node.electionTimeout = time.NewTimer(tRandom)
 
 	go func() {
-		//thread for each node checking for timeout
+		fmt.Printf("Remaining time: %v\n", node.electionTimeout)
 		<-node.electionTimeout.C
 
-		// Printed when timer is fired
-		fmt.Println("timer inactivated for node", node.selfID)
-
-		//if node reaches this point, it starts an election because it has not received a heartbeat
+		fmt.Println("start leader election from main timeout")
 		node.LeaderElection()
 	}()
 
+	//go node.ClientAddToLog()
 	var wg sync.WaitGroup
 	wg.Add(1)
-	wg.Wait() // Waits forever, so main process does not stop
+	wg.Wait()
+	// ** Once leader election ends, then check if 'I am the leader'
+	// ** If node is leader, then call heartbeats all the time
 
 }
+
+/*
+1. client reaches out to servers
+2. if server is leader, it will append that entry to its log
+3. it will send that entry via AppendEntry to all other servers
+	Case 1: Missing entries
+	a. for each server, if server's last term is outdated, it fails, and leader will decrement
+	next index and try again until they find a match.
+	Case 2: Wrong entries (mismatch)
+	a. for each server, if server's last entry is diff but at the same index as leader's, then delete,
+	delete entry and all that follow until a match is found
+	b. Delete any entries after that point and replace with the
+	append any new entries not already in the log, until the server's last log index == leader's commitIndex
+	update node's committedIndex every appendEntry to be either leader's commitIndex or index of last new enty
+4. If majority of the servers replicate it then leader commits entry, notifies servers it has committed
+
+*/
