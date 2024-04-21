@@ -105,9 +105,10 @@ func (node *RaftNode) ClientAddToLog() {
 
 				//if log list has more than one element
 				if len(node.log)-1 != 0 {
-			 	prevLogEntry = node.log[followerPrevLogIndex]
-				}else{
-
+			 		prevLogEntry = node.log[followerPrevLogIndex]
+				} 
+				
+				else{
 					//this case can be used to check if leader log is just starting, don't actually append this
 					prevLogEntry = LogEntry{-1, -1}
 				}
@@ -123,7 +124,6 @@ func (node *RaftNode) ClientAddToLog() {
 						PrevLogEntry: prevLogEntry,
 						LeaderCommit: node.commitIndex,
 					}
-
 
 					// Create a reply variable to store the response
 					var reply AppendEntryReply
@@ -151,7 +151,8 @@ func (node *RaftNode) ClientAddToLog() {
 								node.resetElectionTimeout()
 								node.Mutex.Unlock()
 								return
-							}else{
+							}
+							else {
 								go func() {
 									//the follower node's log is inconsistent, decrement nextIndex
 									node.nextIndex[peer.serverID] -= 1
@@ -164,24 +165,22 @@ func (node *RaftNode) ClientAddToLog() {
 									var prevLogEntry LogEntry
 									//if log list has more than one element
 									if len(node.log)-1 != 0 {
-									prevLogEntry = node.log[followerPrevLogIndex]
-									}else{
+										prevLogEntry = node.log[followerPrevLogIndex]
+									}
+									else{
 										//this case can be used to check if leader log is just starting, don't actually append this
 										prevLogEntry = LogEntry{-1, -1}
 									}
-
-									//if len(node.log)-1 >= node.nextIndex[peer.serverID] { //follower is not up to date
 										
-										// Construct arguments for AppendEntry RPC call
-										args := AppendEntryArgument{
-											Term:         tempCurrentTerm,
-											LeaderID:     node.selfID,
-											Entries:      node.log[followerPrevLogIndex+1],
-											PrevLogEntry: prevLogEntry,//node.log[followerPrevLogIndex], //prevLogEntry, //fix this so that second argument makes sense
-											LeaderCommit: node.commitIndex,
-										}
-									
-								
+									// Construct arguments for AppendEntry RPC call
+									args := AppendEntryArgument{
+										Term:         tempCurrentTerm,
+										LeaderID:     node.selfID,
+										Entries:      node.log[followerPrevLogIndex+1],
+										PrevLogEntry: prevLogEntry,//node.log[followerPrevLogIndex], //prevLogEntry, //fix this so that second argument makes sense
+										LeaderCommit: node.commitIndex,
+									}
+
 									err := peer.rpcConnection.Call("RaftNode.AppendEntry", args, &reply)
 									fmt.Print("called rpc in ClientCall");
 									if err != nil {
@@ -201,15 +200,14 @@ func (node *RaftNode) ClientAddToLog() {
 				}
 			}
 			
-			
 			//count number of followers that have replicated
 			totalReplicated := 0 
 
 			fmt.Println("Initialized totalReplicated")
 			node.Mutex.Lock()
 			if (len(node.log) - 1 > node.commitIndex ){
-				fmt.Printf("there is an unbcommitted log")
-				//there is an uncomitted entry
+				fmt.Printf("there is an uncommitted log")
+				// there is an uncomitted entry
 				for _, replicatedIndex := range node.matchIndex {
 					if (replicatedIndex >= len(node.log) -1) && node.log[len(node.log) - 1].Term == tempCurrentTerm{//node.currentTerm{
 						totalReplicated++
@@ -223,8 +221,8 @@ func (node *RaftNode) ClientAddToLog() {
 				node.commitIndex = len(node.log) - 1
 			}
 			node.Mutex.Unlock()
-
-		}else {
+		}
+		else {
 			fmt.Println("node is not the leader, don't call clientCall")
 		}
 		//time.Sleep(40 * time.Millisecond) //40
@@ -234,9 +232,7 @@ func (node *RaftNode) ClientAddToLog() {
 // Hint 1: Use the description in Figure 2 of the paper
 // Hint 2: Only focus on the details related to leader election and heartbeats
 func (node *RaftNode) AppendEntry(arguments AppendEntryArgument, reply *AppendEntryReply) error {
-
 	// check the term that is coming in
-
 	node.Mutex.Lock()
 	defer node.Mutex.Unlock()
 
