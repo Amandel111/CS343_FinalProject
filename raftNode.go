@@ -35,6 +35,9 @@ type AppendEntryArgument struct {
 	PrevLogIndex int
 	PrevLogTerm  int
 	LeaderCommit int
+	CommandType  string //"R", "W"
+	FileName 	 string // created in ClientAddToLog function
+	
 }
 
 type AppendEntryReply struct {
@@ -65,22 +68,100 @@ type RaftNode struct {
 	log             []LogEntry
 	nextIndex       map[int]int // nodeID: nodeIndex
 	matchIndex      map[int]int //use this for leader to know when majority of servers have replicated an entry
-
+	lasApplied 		int
 }
+
+type ClientArguments struct {
+	EntityID int 
+	EntityType string // i.e. "post", "user"
+	CommandType string // "R" for read, "W" for write
+	Data string // empty for reads; data that client wants to write
+}
+
+type ClientReply struct {
+	Content string  // if "R" return this content to client, elif "W" return empty string for content
+	FileName string // we make as "EntityType + EntityID"
+	Success bool // true only after data is applied to file and all logs are consistent
+}
+
+// Helper Functions -------------------------
+// This file adds the file (entityType + entityID) to the directory
+// called in readFile() before reading or writing to a file
+// if file or dir doesn't exists then this function is called
+func createDirAndFile(fileName string, dirName string) error {
+	// Note: 0777 permissions grants full access to everyone
+	// Creating DIRECTORY
+    err := os.Mkdir(dirName, 0777)
+    if err != nil {
+        fmt.Println("Error creating directory:", err)
+        return err
+    }
+    fmt.Println("Directory created successfully:", dirName)
+
+    // no errors so creating the FILE
+    file, err := os.Create(fileName)
+    if err != nil {
+        fmt.Println("Error creating file:", err)
+        return err
+    }
+    defer file.Close()
+    fmt.Println("File created successfully:", fileName)
+	return nil
+}
+
+// This function locates the file and overwrites it with the new data that the client specifies
+// data: from ClientArguments Data variable passed in from ClientAddToLog() when writeFile() is called
+func writeFile(fileName string, dirName string, data string) error {
+	// check if file and dir exists, if not create it to write to it
+	if _, err := os.Stat(fileName); os.IsNotExist(err) {
+		// create the file if not found in directory
+		createDirAndFile(fileName, dirName)
+	}
+	
+	// Writing to/Modifying the file (aka overwriting it)
+	file, err := os.OpenFile(fileName, os.O_WRONLY|os.O_TRUNC, 0644) // 0644 - write mode
+	if err != nill {
+		return err
+	}
+	defer file.Close()
+
+	// Writing the data to the file 
+	_, err = file.writeString(data)
+	if err != nill {
+		return err
+	}
+	return nil
+}
+
+// func readFile(fileName string, dirName string) error {
+// 	// get fileName 
+// 	entityID := strconv.Itoa(args.EntityID)
+// 	fileName := args.EntityType + entityID
+// 	if _, err := os.Stat(fileName); os.IsNotExist(err) {
+// 		// create the file if not found in directory
+// 		return createDirAndFile(fileName, dirName)
+// 	}
+// 	// Modifying the file (aka overwriting it)
+// 	file, err := os.OpenFile(fileName, os.O_WRONLY|os.O_TRUNC, 0644) // write mode
+// 	if err != nill {
+// 		return err
+// 	}
+// 	defer file.Close()
+// }
 
 // This function is designed to emulate a client reaching out to the
 // server. Note that many of the realistic details are removed, for simplicity
-func (node *RaftNode) ClientAddToLog() {
-	// In a realistic scenario, the client will find the leader node and
-	//communicate with it. In this implementation, we are pretending that the client reached
-	//out to the server somehow
-	// But any new log entries will not be created unless the server /node is a leader
-	// isLeader here is a boolean to indicate whether the node is a leader or not
-	//for {
-		
+func (node *RaftNode) ClientAddToLog(args ClientArgs, reply *ClientReply) error {
+	dirName := "CS343"
 		node.Mutex.Lock()
 		if node.state == "leader" {
 
+			//make filename for the file the client is requesting to read/write to
+			fileName := args.EntityID + args.EntityID
+			fmt.Println("fileName for client request: ", fileName)
+
+			 createDirAndFile(fileName, dirName)
+			
 			entry := LogEntry{len(node.log), node.currentTerm}
 			log.Println("Client communication created the new log entry at index " + strconv.Itoa(entry.Index))
 
@@ -393,7 +474,7 @@ func (node *RaftNode) transitionToLeader() {
 		node.matchIndex[peer.serverID] = 0
 	}
 	go Heartbeat(node, node.serverNodes)
-	go node.ClientAddToLog()
+	go node.ClientAddToLog(1, "post", "W", "hello world")
 
 }
 
@@ -587,22 +668,6 @@ func main() {
 	go http.ListenAndServe(myPort, nil)
 	log.Printf("serving rpc on port" + myPort)
 
-	// This is a workaround to slow things down until all servers are up and running
-	// Idea: wait for user input to indicate that all servers are ready for connections
-	// Pros: Guaranteed that all other servers are already alive
-	// Cons: Non-realistic work around
-
-	// reader := bufio.NewReader(os.Stdin)
-	// fmt.Print("Type anything when ready to connect >> ")
-	// text, _ := reader.ReadString('\n')
-	// fmt.Println(text)
-
-	// Idea 2: keep trying to connect to other servers even if failure is encountered
-	// For fault tolerance, each node will continuously try to connect to other nodes
-	// This loop will stop when all servers are connected
-	// Pro: Realistic setup
-	// Con: If one server is not set up correctly, the rest of the system will halt
-
 	for index, element := range lines {
 		// Attemp to connect to the other server node
 		client, err := rpc.DialHTTP("tcp", element)
@@ -619,26 +684,6 @@ func main() {
 		// Record that in log
 		fmt.Println("Connected to " + element)
 	}
-
-	/*
-		**NOTES: Can we save the connections in a map?
-		How do we make more than one node initialize the election? Is that something we have to implement?
-		For now, let's just assume only one starts the election
-	*/
-
-	// call leader election like in peer-pressure, and add the logic in it
-
-	// Once all the connections are established, we can start the typical operations within Raft
-	// Leader election and heartbeats are concurrent and non-stop in Raft
-
-	// HINT 1: You may need to start a thread here (or more, based on your logic)
-	// Hint 2: Main process should never stop
-	// Hint 3: After this point, the threads should take over
-	// Heads up: they never will be done!
-	// Hint 4: wg.Wait() might be helpful here
-	// go node.startElectionTimer()
-
-	//start a timer for every node
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	tRandom := time.Duration(r.Intn(150)+151) * time.Millisecond
