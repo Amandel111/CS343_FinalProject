@@ -80,7 +80,7 @@ type ClientArguments struct {
 
 type ClientReply struct {
 	Content string  // if "R" return this content to client, elif "W" return empty string for content
-	FileName string // we make as "EntityType + EntityID"
+//	FileName string // we make as "EntityType + EntityID"
 	Success bool // true only after data is applied to file and all logs are consistent
 }
 
@@ -120,17 +120,17 @@ func writeFile(fileName string, dirName string, data string) error {
 	
 	// Writing to/Modifying the file (aka overwriting it)
 	file, err := os.OpenFile(fileName, os.O_WRONLY|os.O_TRUNC, 0644) // 0644 - write mode
-	if err != nill {
+	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	// Writing the data to the file 
-	_, err = file.writeString(data)
-	if err != nill {
-		return err
-	}
-	return nil
+	// // Writing the data to the file 
+	// _, err = file.writeString(data)
+	// if err != nil {
+	// 	return err
+	// }
+    return nil
 }
 
 // func readFile(fileName string, dirName string) error {
@@ -151,13 +151,13 @@ func writeFile(fileName string, dirName string, data string) error {
 
 // This function is designed to emulate a client reaching out to the
 // server. Note that many of the realistic details are removed, for simplicity
-func (node *RaftNode) ClientAddToLog(args ClientArgs, reply *ClientReply) error {
+func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientReply) error {
 	dirName := "CS343"
 		node.Mutex.Lock()
 		if node.state == "leader" {
 
 			//make filename for the file the client is requesting to read/write to
-			fileName := args.EntityID + args.EntityID
+			fileName := args.EntityType + strconv.Itoa(args.EntityID)
 			fmt.Println("fileName for client request: ", fileName)
 
 			 createDirAndFile(fileName, dirName)
@@ -187,9 +187,7 @@ func (node *RaftNode) ClientAddToLog(args ClientArgs, reply *ClientReply) error 
 				//if log list has more than one element
 				if len(node.log)-1 != 0 {
 			 		prevLogEntry = node.log[followerPrevLogIndex]
-				} 
-				
-				else{
+				} else {
 					//this case can be used to check if leader log is just starting, don't actually append this
 					prevLogEntry = LogEntry{-1, -1}
 				}
@@ -231,9 +229,10 @@ func (node *RaftNode) ClientAddToLog(args ClientArgs, reply *ClientReply) error 
 								node.currentTerm = reply.Term
 								node.resetElectionTimeout()
 								node.Mutex.Unlock()
-								return
-							}
-							else {
+								// TODO: Success is false, Content is empty
+								// clientReply := ClientArguments
+								return nil 
+							} else {
 								go func() {
 									//the follower node's log is inconsistent, decrement nextIndex
 									node.nextIndex[peer.serverID] -= 1
@@ -247,8 +246,7 @@ func (node *RaftNode) ClientAddToLog(args ClientArgs, reply *ClientReply) error 
 									//if log list has more than one element
 									if len(node.log)-1 != 0 {
 										prevLogEntry = node.log[followerPrevLogIndex]
-									}
-									else{
+									} else{
 										//this case can be used to check if leader log is just starting, don't actually append this
 										prevLogEntry = LogEntry{-1, -1}
 									}
@@ -302,11 +300,11 @@ func (node *RaftNode) ClientAddToLog(args ClientArgs, reply *ClientReply) error 
 				node.commitIndex = len(node.log) - 1
 			}
 			node.Mutex.Unlock()
-		}
-		else {
+		} else {
 			fmt.Println("node is not the leader, don't call clientCall")
 		}
 		//time.Sleep(40 * time.Millisecond) //40
+		return nil
 }
 
 // The AppendEntry RPC as defined in Raft
@@ -355,7 +353,7 @@ func (node *RaftNode) AppendEntry(arguments AppendEntryArgument, reply *AppendEn
 					node.log = append(node.log, arguments.Entries)
 					node.commitIndex = int(math.Min(float64(arguments.Entries.Index), float64(arguments.LeaderCommit)))
 					reply.Success = true
-				}else{
+				} else{
 					//leader has more than one entry so follower is behind
 					reply.Success = false
 				}
@@ -474,7 +472,8 @@ func (node *RaftNode) transitionToLeader() {
 		node.matchIndex[peer.serverID] = 0
 	}
 	go Heartbeat(node, node.serverNodes)
-	go node.ClientAddToLog(1, "post", "W", "hello world")
+
+	//go node.ClientAddToLog()
 
 }
 
@@ -698,6 +697,23 @@ func main() {
 	}()
 
 	//go node.ClientAddToLog()
+
+	for _, server := range node.serverNodes {
+		clientArgs := ClientArguments{
+			EntityID: 1,
+			EntityType: "user",
+			CommandType: "W",
+			Data: "testing",
+		}
+		var clientReply ClientReply
+	
+		err := server.rpcConnection.Call("RaftNode.ClientAddToLog", clientArgs, &clientReply)
+		if err != nil {
+			fmt.Printf("Error callng ClientAddToLog: %v\n", err)
+			return
+		}
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	wg.Wait()
