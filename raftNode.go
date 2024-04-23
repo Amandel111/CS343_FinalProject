@@ -302,6 +302,7 @@ func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientRe
 			}
 			node.Mutex.Unlock()
 		} else {
+			node.Mutex.Unlock()
 			fmt.Println("node is not the leader, don't call clientCall")
 		}
 		//time.Sleep(40 * time.Millisecond) //40
@@ -420,7 +421,6 @@ func (node *RaftNode) RequestVote(arguments VoteArguments, reply *VoteReply) err
 	if arguments.Term > node.currentTerm && (arguments.LastLogIndex >= receiverLastLogIndex) && (arguments.LastLogTerm >= receiverLastLogTerm){
 		node.currentTerm = arguments.Term // receiver node will update current term to match canddiate's term
 		node.votedFor = -1                // reset this count since candidate's term is larger
-
 		// Acknowledging vote or not to the candidate
 		reply.Term = node.currentTerm
 		reply.ResultVote = true               // receiver node will vote yes
@@ -698,7 +698,7 @@ func main() {
 	}()
 	//go node.ClientAddToLog()
 
-	go func() { 
+	//go func() { 
 		for _, server := range node.serverNodes {
 		clientArgs := ClientArguments{
 			EntityID: 1,
@@ -715,7 +715,7 @@ func main() {
 		}
 	}
 	//return 
-	}()
+	//}()
 	var wg sync.WaitGroup
 	wg.Add(1)
 	wg.Wait()
