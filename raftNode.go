@@ -68,7 +68,7 @@ type RaftNode struct {
 	log             []LogEntry
 	nextIndex       map[int]int // nodeID: nodeIndex
 	matchIndex      map[int]int //use this for leader to know when majority of servers have replicated an entry
-	lasApplied 		int
+	lastApplied 	int
 }
 
 type ClientArguments struct {
@@ -152,6 +152,7 @@ func writeFile(fileName string, dirName string, data string) error {
 // This function is designed to emulate a client reaching out to the
 // server. Note that many of the realistic details are removed, for simplicity
 func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientReply) error {
+	fmt.Print("made it ClientAddToLog")
 	dirName := "CS343"
 		node.Mutex.Lock()
 		if node.state == "leader" {
@@ -695,10 +696,10 @@ func main() {
 		fmt.Println("start leader election from main timeout")
 		node.LeaderElection()
 	}()
-
 	//go node.ClientAddToLog()
 
-	for _, server := range node.serverNodes {
+	go func() { 
+		for _, server := range node.serverNodes {
 		clientArgs := ClientArguments{
 			EntityID: 1,
 			EntityType: "user",
@@ -713,7 +714,8 @@ func main() {
 			return
 		}
 	}
-
+	//return 
+	}()
 	var wg sync.WaitGroup
 	wg.Add(1)
 	wg.Wait()
