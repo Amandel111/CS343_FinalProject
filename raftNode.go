@@ -70,7 +70,7 @@ type RaftNode struct {
 	log             []LogEntry
 	nextIndex       map[int]int // nodeID: nodeIndex
 	matchIndex      map[int]int //use this for leader to know when majority of servers have replicated an entry
-	lasApplied 		int
+	lastApplied 	int
 }
 
 type ClientArguments struct {
@@ -154,6 +154,7 @@ func writeFile(fileName string, dirName string, data string) error {
 // This function is designed to emulate a client reaching out to the
 // server. Note that many of the realistic details are removed, for simplicity
 func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientReply) error {
+	fmt.Print("made it ClientAddToLog")
 	dirName := "CS343"
 		node.Mutex.Lock()
 		if node.state == "leader" {
@@ -303,6 +304,7 @@ func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientRe
 			}
 			node.Mutex.Unlock()
 		} else {
+			node.Mutex.Unlock()
 			fmt.Println("node is not the leader, don't call clientCall")
 		}
 		//time.Sleep(40 * time.Millisecond) //40
@@ -421,7 +423,6 @@ func (node *RaftNode) RequestVote(arguments VoteArguments, reply *VoteReply) err
 	if arguments.Term > node.currentTerm && (arguments.LastLogIndex >= receiverLastLogIndex) && (arguments.LastLogTerm >= receiverLastLogTerm){
 		node.currentTerm = arguments.Term // receiver node will update current term to match canddiate's term
 		node.votedFor = -1                // reset this count since candidate's term is larger
-
 		// Acknowledging vote or not to the candidate
 		reply.Term = node.currentTerm
 		reply.ResultVote = true               // receiver node will vote yes
@@ -716,9 +717,17 @@ func main() {
 		fmt.Println("start leader election from main timeout")
 		node.LeaderElection()
 	}()
-
 	//go node.ClientAddToLog()
 
+	//go func() { 
+		for _, server := range node.serverNodes {
+		clientArgs := ClientArguments{
+			EntityID: 1,
+			EntityType: "user",
+			CommandType: "W",
+			Data: "testing",
+		}
+		var clientReply ClientReply
 	//time.Sleep(40 * time.Millisecond) //40
 	// for _, server := range node.serverNodes {
 	// 	clientArgs := ClientArguments{
