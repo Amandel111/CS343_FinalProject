@@ -54,13 +54,11 @@ type ServerConnection struct {
 type LogEntry struct {
 	Index int
 	Term  int
-	//CommandType string
-	//Data string
 }
 
 type RaftNode struct {
 	selfID          int
-	serverNodes     []ServerConnection // peer nodes, doesn't include itself
+	serverNodes     []ServerConnection
 	currentTerm     int
 	votedFor        int
 	state           string // "follower", "candidate", "leader"
@@ -163,14 +161,14 @@ func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientRe
 			fileName := args.EntityType + strconv.Itoa(args.EntityID)
 			fmt.Println("fileName for client request: ", fileName)
 
-			createDirAndFile(fileName, dirName)
+			 createDirAndFile(fileName, dirName)
 			
 			entry := LogEntry{len(node.log), node.currentTerm}
 			log.Println("Client communication created the new log entry at index " + strconv.Itoa(entry.Index))
 
 			// leader: add entry to log
 			node.log = append(node.log, entry)
-			fmt.Println("leader's log after appending: ", node.log);
+			fmt.Println("leader;s log after appending: ", node.log);
 			
 
 			//make local copy of currentTerm for safety outside lock
@@ -465,7 +463,6 @@ func (node *RaftNode) transitionToCandidate() {
 }
 
 func (node *RaftNode) transitionToLeader() {
-	fmt.Println("Leader Elected!")
 	fmt.Println("node ", node.selfID, "transitions to leader")
 	node.state = "leader"
 	node.resetElectionTimeout() // Reset the election timeout since the node is now leader
@@ -478,23 +475,7 @@ func (node *RaftNode) transitionToLeader() {
 	go Heartbeat(node, node.serverNodes)
 
 	//go node.ClientAddToLog()
-	clientArgs := ClientArguments{
-		EntityID: 1,
-		EntityType: "user",
-		CommandType: "W",
-		Data: "testing",
-	}
-	var clientReply ClientReply
-	leaderConnection := ServerConnection{
-		serverID: node.selfID,
-		Address: 
-	}
 
-	err := node.rpcConnection.Call("RaftNode.ClientAddToLog", clientArgs, &clientReply)
-	if err != nil {
-		fmt.Printf("Error callng ClientAddToLog: %v\n", err)
-		return
-	}
 }
 
 // You may use this function to help with handling the election time out
@@ -505,11 +486,9 @@ func (node *RaftNode) LeaderElection() {
 	fmt.Printf("Node %d starts leader election\n", node.selfID)
 	node.Mutex.Lock()
 	node.currentTerm++
-	fmt.Println("made it to line 490")
 	node.votedFor = node.selfID
 	node.Mutex.Unlock()
 
-	fmt.Println("made it to line 493")
 	fmt.Print("candidate log: ", node.log)
 	fmt.Print("candidate log length: ", len(node.log))
 	lastLogIndex := -1
@@ -728,23 +707,15 @@ func main() {
 			Data: "testing",
 		}
 		var clientReply ClientReply
-	//time.Sleep(40 * time.Millisecond) //40
-	// for _, server := range node.serverNodes {
-	// 	clientArgs := ClientArguments{
-	// 		EntityID: 1,
-	// 		EntityType: "user",
-	// 		CommandType: "W",
-	// 		Data: "testing",
-	// 	}
-	// 	var clientReply ClientReply
 	
-	// 	err := server.rpcConnection.Call("RaftNode.ClientAddToLog", clientArgs, &clientReply)
-	// 	if err != nil {
-	// 		fmt.Printf("Error callng ClientAddToLog: %v\n", err)
-	// 		return
-	// 	}
-	// }
-
+		err := server.rpcConnection.Call("RaftNode.ClientAddToLog", clientArgs, &clientReply)
+		if err != nil {
+			fmt.Printf("Error callng ClientAddToLog: %v\n", err)
+			return
+		}
+	}
+	//return 
+	//}()
 	var wg sync.WaitGroup
 	wg.Add(1)
 	wg.Wait()
