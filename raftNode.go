@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 	"math"
+	"path/filepath"
+	"io/ioutil"
 )
 
 type VoteArguments struct {
@@ -58,6 +60,7 @@ type LogEntry struct {
 
 type RaftNode struct {
 	selfID          int
+	leaderID        int
 	serverNodes     []ServerConnection
 	currentTerm     int
 	votedFor        int
@@ -82,6 +85,7 @@ type ClientReply struct {
 	Content string  // if "R" return this content to client, elif "W" return empty string for content
 //	FileName string // we make as "EntityType + EntityID"
 	Success bool // true only after data is applied to file and all logs are consistent
+	LeaderID int
 }
 
 // Helper Functions -------------------------
@@ -99,14 +103,16 @@ func createDirAndFile(fileName string, dirName string) error {
     }
     fmt.Println("Directory created successfully:", dirName)
 
+	// creating the file path within the directory
+	filePath := filepath.Join(dirName, fileName)
     // no errors so creating the FILE
-    file, err := os.Create(fileName)
+	file, err := os.Create(filePath)
     if err != nil {
         fmt.Println("Error creating file:", err)
         return err
     }
     defer file.Close()
-    fmt.Println("File created successfully:", fileName)
+    fmt.Println("File created successfully:", filePath)
 	return nil
 }
 
@@ -114,56 +120,69 @@ func createDirAndFile(fileName string, dirName string) error {
 // data: from ClientArguments Data variable passed in from ClientAddToLog() when writeFile() is called
 func writeFile(fileName string, dirName string, data string) error {
 	fmt.Println("Calling WRITEFILE")
-	// check if file and dir exists, if not create it to write to it
-	if _, err := os.Stat(fileName); os.IsNotExist(err) {
-		// create the file if not found in directory
+
+	// Constructing the file path within the directory
+	filePath := filepath.Join(dirName, fileName)
+
+	// Check if file exists
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		// File does not exist, create it
 		createFileErr := createDirAndFile(fileName, dirName)
 		if createFileErr != nil {
 			fmt.Println("Error creating file in writeFile:", createFileErr)
 			return createFileErr
 		}
 	}
-	
-	// Writing to/Modifying the file (aka overwriting it)
-	file, openFileErr := os.OpenFile(fileName, os.O_WRONLY|os.O_TRUNC, 0644) // 0644 - write mode
+
+	// Open the file for writing
+	file, openFileErr := os.OpenFile(filePath, os.O_WRONLY|os.O_TRUNC, 0644)
 	if openFileErr != nil {
-		fmt.Println("Error opening file in write file:", openFileErr)
+		fmt.Println("Error opening file in writeFile:", openFileErr)
 		return openFileErr
 	}
 	defer file.Close()
 
-	// Writing the data to the file 
+	// Write data to the file
 	_, writeDataErr := file.WriteString(data)
 	if writeDataErr != nil {
 		fmt.Println("Error writing data to file in writeFile:", writeDataErr)
 		return writeDataErr
 	}
-    return nil
+
+	fmt.Println("Data written successfully to file:", filePath)
+	return nil
 }
 
-func readFile(fileName string, dirName string) (*os.File, error) {
+
+func readFile(fileName string, dirName string) (string, error) {
 	fmt.Println("Calling READFILE")
-	// get fileName 																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																										
-																																																																																																																																																																																																																																																																																																																																																																																																																																																																																										
-	if _, err := os.Stat(fileName); os.IsNotExist(err) {
-		// create the file if not found in directory so create new file with filename and dirname
-		createFileErr := createDirAndFile(fileName, dirName)
-		if createFileErr != nil {
-			fmt.Println("Error creating file in readFile:", createFileErr)
-			return nil, createFileErr
-		}
+	filePath := filepath.Join(dirName, fileName)
+	// Check if file exists
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		fmt.Println("file does not exist in dirName:", dirName)
+		fmt.Println("file name that we couldn't find in readFile: ", fileName)
+		return "", err // error should not be nil since file did not exist
 	}
 
-	// open the file in read mode
-	file, openFileErr := os.Open(fileName)
+	// Open the file in read mode
+	file, openFileErr := os.Open(filePath)
 	if openFileErr != nil {
 		fmt.Println("Error opening file in readFile:", openFileErr)
-		return nil, openFileErr
+		return "", openFileErr
+	}
+	defer file.Close()
+
+	// Read all contents of the file
+	content, readErr := ioutil.ReadAll(file)
+	if readErr != nil {
+		fmt.Println("Error reading file in readFile:", readErr)
+		return "", readErr
 	}
 
-	// return the file that client wants to read
-	fmt.Println("Successfully read file: ", file)
-	return file, nil
+	// Convert the content to a string
+	contentStr := string(content)
+	fmt.Println("Successfully read file:", filePath)
+	return contentStr, nil
 }
 
 // This function is designed to emulate a client reaching out to the
@@ -178,11 +197,25 @@ func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientRe
 			fileName := args.EntityType + strconv.Itoa(args.EntityID)
 			fmt.Println("fileName for client request: ", fileName)
 
-			// createDirAndFile(fileName, dirName)
+			// handle client requests
 			if args.CommandType == "R" {
-				readFile(fileName, dirName)
+				file, err := readFile(fileName, dirName)
+				if err != nil{
+					clientReply.Success = false
+					fmt.Println("Error in readFile in ClientAddToLog")
+					return err
+				}
+				clientReply.Success = true
+				clientReply.Content = file
 			} else if args.CommandType == "W" {
-				writeFile(fileName, dirName, args.Data)
+				err := writeFile(fileName, dirName, args.Data)
+				if err != nil {
+					clientReply.Success = false
+					fmt.Println("Error in writeFile in ClientAddToLog")
+					return err
+				}
+				clientReply.Content = "" // empty reply content
+				clientReply.Success = true
 			}
 			
 			entry := LogEntry{len(node.log), node.currentTerm}
@@ -207,7 +240,7 @@ func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientRe
 				var prevLogEntry LogEntry
 				fmt.Println("checking 207")
 				//if log list has more than one element
-				if len(node.log)-1 != 0 {
+				if len(node.log) > 1 {
 					fmt.Println("checking followerPrevLogIndex: ", followerPrevLogIndex)
 			 		prevLogEntry = node.log[followerPrevLogIndex]
 					//prevLogEntry = node.log[followerPrevLogIndex+1]
@@ -234,7 +267,7 @@ func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientRe
 					var reply AppendEntryReply
 
 					// Call AppendEntry RPC on the peer
-					
+					var wg sync.WaitGroup
 					err := peer.rpcConnection.Call("RaftNode.AppendEntry", args, &reply)
 					if err != nil {
 						fmt.Printf("Error calling AppendEntry in Client to node %d: %v\n", peer.serverID, err)
@@ -242,7 +275,6 @@ func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientRe
 					} else {
 						for !reply.Success {
 							//if the rpc failed, two cases: either this is not the leader node, or follower node's log is inconsistent
-							
 							
 							fmt.Println("log entry appending failed for node ", peer.serverID, "try again")
 							
@@ -260,17 +292,20 @@ func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientRe
 								return nil 
 							} else {
 								go func() {
+									wg.Add(1)
+									defer wg.Done()
 									//the follower node's log is inconsistent, decrement nextIndex
 									node.nextIndex[peer.serverID] -= 1
+									//node.nextIndex[peer.serverID] =int(math.Max(float64(node.nextIndex[peer.serverID] - 1), float64(0))) // dubious edit!
 
 									//set argument up
-									followerPrevLogIndex := node.nextIndex[peer.serverID] //- 1
-									fmt.Println("follower prev log index ", followerPrevLogIndex)
-									fmt.Println("leader entry ", node.log[followerPrevLogIndex+1])
+									followerPrevLogIndex := node.nextIndex[peer.serverID] - 1
+									fmt.Println("retry follower prev log index ", followerPrevLogIndex)
+									fmt.Println("retry leader entry ", node.log[followerPrevLogIndex+1])
 					
 									var prevLogEntry LogEntry
 									//if log list has more than one element
-									if len(node.log)-1 != 0 {
+									if len(node.log) > 1 {
 										prevLogEntry = node.log[followerPrevLogIndex]
 									} else{
 										//this case can be used to check if leader log is just starting, don't actually append this
@@ -287,18 +322,19 @@ func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientRe
 									}
 
 									err := peer.rpcConnection.Call("RaftNode.AppendEntry", args, &reply)
-									fmt.Print("called rpc in ClientCall");
+									fmt.Print("retyr called rpc in ClientCall");
 									if err != nil {
 										fmt.Printf("Error calling AppendEntry in Client to node %d: %v\n", peer.serverID, err)
 									}
 								}()
-												
+								wg.Wait()			
 							}
 						}
 						//append worked, increment nextIndex
 						fmt.Print("append entry returned success")
 						node.Mutex.Lock()
 						node.nextIndex[peer.serverID] += 1
+						fmt.Println("node.nextIndex for ", peer.serverID, " is ", node.nextIndex[peer.serverID])
 						node.matchIndex[peer.serverID] += 1
 						node.Mutex.Unlock()
 					}
@@ -329,6 +365,8 @@ func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientRe
 		} else {
 			node.Mutex.Unlock()
 			fmt.Println("This node is not the leader, don't call clientCall")
+			clientReply.Success = false
+			clientReply.LeaderID = node.leaderID
 		}
 		//time.Sleep(40 * time.Millisecond) //40
 		return nil
@@ -342,7 +380,6 @@ func (node *RaftNode) AppendEntry(arguments AppendEntryArgument, reply *AppendEn
 	node.Mutex.Lock()
 	defer node.Mutex.Unlock()
 
-	//fmt.Println("arguments to AppendEntry for node ", node.selfID, " : ", arguments)
 	// Check if the leader's term is less than receiving
 	if arguments.Term < node.currentTerm {
 
@@ -364,6 +401,7 @@ func (node *RaftNode) AppendEntry(arguments AppendEntryArgument, reply *AppendEn
 			// Reset the election timeout as the leader is now active, this node is def not leader so step down
 			node.resetElectionTimeout()
 			node.transitionToFollower()
+			node.leaderID = arguments.LeaderID // let follower know who the leader is
 		} else {
 			fmt.Println("arguments to AppendEntry for node ", node.selfID, " : ", arguments)
 			fmt.Println("in term ", arguments.Term, "passed entry: ", arguments.Entries)
@@ -416,8 +454,6 @@ func (node *RaftNode) AppendEntry(arguments AppendEntryArgument, reply *AppendEn
 					reply.Success = true
 				}
 			}
-
-			//fmt.Println("NODE ", node.selfID, "'S LOG: ", node.log)
 	}
 }
 	return nil
@@ -464,15 +500,8 @@ func (node *RaftNode) resetElectionTimeout() {
 	//fmt.Println("reset timer for node ", node.selfID)
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	duration := time.Duration(r.Intn(150)+150) * time.Millisecond
-	//if node.electionTimeout != nil {
-	//	node.electionTimeout.Stop()
-	//}
 	node.electionTimeout.Stop()
 	node.electionTimeout.Reset(duration)
-	// used when transitioning to candidate state
-	// node.electionTimeout = time.AfterFunc(duration, func() {
-	// 	node.transitionToCandidate()
-	// })
 }
 
 func (node *RaftNode) transitionToFollower() {
@@ -483,23 +512,19 @@ func (node *RaftNode) transitionToFollower() {
 func (node *RaftNode) transitionToCandidate() {
 	node.state = "candidate"
 	node.votedFor = node.selfID
-	// node.resetElectionTimeout()
 }
 
 func (node *RaftNode) transitionToLeader() {
 	fmt.Println("node ", node.selfID, "transitions to leader")
 	node.state = "leader"
 	node.resetElectionTimeout() // Reset the election timeout since the node is now leader
-	// Initialize variables
 
 	for _, peer := range node.serverNodes {
 		node.nextIndex[int(peer.serverID)] = len(node.log) //+ 1
 		node.matchIndex[peer.serverID] = 0
 	}
 	go Heartbeat(node, node.serverNodes)
-
 	//go node.ClientAddToLog()
-
 }
 
 // You may use this function to help with handling the election time out
@@ -564,12 +589,11 @@ func (node *RaftNode) LeaderElection() {
 	}
 	wg.Wait()
 
-		if votesReceived > len(node.serverNodes)/2 {
-			node.Mutex.Lock()
-			fmt.Printf("Node %d becomes leader for term %d\n", node.selfID, node.currentTerm)
-			node.Mutex.Unlock()
-			node.transitionToLeader()
-
+	if votesReceived > len(node.serverNodes)/2 {
+		node.Mutex.Lock()
+		fmt.Printf("Node %d becomes leader for term %d\n", node.selfID, node.currentTerm)
+		node.Mutex.Unlock()
+		node.transitionToLeader()
 	} else {
 		fmt.Printf("Node %d failed to become leader for term %d\n", node.selfID, node.currentTerm)
 		node.transitionToFollower()
@@ -625,7 +649,6 @@ func Heartbeat(node *RaftNode, peers []ServerConnection) {
 }
 
 func main() {
-
 	// The assumption here is that the command line arguments will contain:
 	// This server's ID (zero-based), location and name of the cluster configuration file
 	arguments := os.Args
@@ -633,8 +656,6 @@ func main() {
 		fmt.Println("Please provide cluster information.")
 		return
 	}
-
-	// Read the values sent in the command line
 
 	// Get this sever's ID (same as its index for simplicity)
 	myID, err := strconv.Atoi(arguments[1])
@@ -672,6 +693,7 @@ func main() {
 	// initialize parameters
 	node := &RaftNode{
 		selfID:      myID,
+		leaderID:    -1, // initially -1 
 		currentTerm: 0,
 		state:       "follower",
 		votedFor:    -1,
@@ -697,7 +719,6 @@ func main() {
 		client, err := rpc.DialHTTP("tcp", element)
 		// If connection is not established
 		for err != nil {
-			// Record it in log
 			// log.Println("Trying again. Connection error: ", err)
 			// Try again!
 			client, err = rpc.DialHTTP("tcp", element)
@@ -726,7 +747,7 @@ func main() {
 	// ClientAddToLog returns somethings that let's the client file
 	// know if the node it chose was the leader or not so we know
 	// to re-run the RPC call in the client file
-	go func() { 
+	/*go func() { 
 		time.Sleep(300 * time.Millisecond)
 		for _, server := range node.serverNodes {
 		clientArgs := ClientArguments{
@@ -744,7 +765,7 @@ func main() {
 		}
 	}
 	return 
-	}()
+	}()*/
 	var wg sync.WaitGroup
 	wg.Add(1)
 	wg.Wait()
