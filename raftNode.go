@@ -94,25 +94,37 @@ type ClientReply struct {
 // if file or dir doesn't exists then this function is called
 func createDirAndFile(fileName string, dirName string) error {
 	fmt.Println("Calling CREATEDIRANDFILE")
-	// Note: 0777 permissions grants full access to everyone
-	// Creating DIRECTORY
-    err := os.Mkdir(dirName, 0777)
-    if err != nil {
-        fmt.Println("Error creating directory:", err)
-        return err
-    }
-    fmt.Println("Directory created successfully:", dirName)
 
-	// creating the file path within the directory
+	// Check if directory already exists
+	if _, err := os.Stat(dirName); os.IsNotExist(err) {
+		// Directory does not exist, so create it
+		err := os.Mkdir(dirName, 0777)
+		if err != nil {
+			fmt.Println("Error creating directory:", err)
+			return err
+		}
+		fmt.Println("Directory created successfully:", dirName)
+	} else if err != nil {
+		// Some other error occurred while checking directory existence
+		fmt.Println("Error checking directory existence:", err)
+		return err
+	} else {
+		// Directory already exists
+		fmt.Println("Directory already exists:", dirName)
+	}
+
+	// Creating the file path within the directory
 	filePath := filepath.Join(dirName, fileName)
-    // no errors so creating the FILE
+
+	// Create the file
 	file, err := os.Create(filePath)
-    if err != nil {
-        fmt.Println("Error creating file:", err)
-        return err
-    }
-    defer file.Close()
-    fmt.Println("File created successfully:", filePath)
+	if err != nil {
+		fmt.Println("Error creating file:", err)
+		return err
+	}
+	defer file.Close()
+	fmt.Println("File created successfully:", filePath)
+
 	return nil
 }
 
