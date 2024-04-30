@@ -56,6 +56,8 @@ type ServerConnection struct {
 type LogEntry struct {
     Index int
     Term  int
+	Data string
+    CommandType string // "R" for read, "W" for write
 }
 
 type RaftNode struct {
@@ -85,8 +87,8 @@ type ClientReply struct {
     Content string  // if "R" return this content to client, elif "W" return empty string for content
 //  FileName string // we make as "EntityType + EntityID"
     Success bool // true only after data is applied to file and all logs are consistent
-    //LeaderID int
-    LeaderAddress string
+    LeaderID int
+    //LeaderAddress string
 }
 
 // Helper Functions -------------------------
@@ -210,28 +212,8 @@ func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientRe
             fileName := args.EntityType + args.EntityID
             fmt.Println("fileName for client request: ", fileName)
 
-            // handle client requests
-            if args.CommandType == "R" {
-                file, err := readFile(fileName, dirName)
-                if err != nil{
-                    clientReply.Success = false
-                    fmt.Println("Error in readFile in ClientAddToLog")
-                    return err
-                }
-                clientReply.Success = true
-                clientReply.Content = file
-            } else if args.CommandType == "W" {
-                err := writeFile(fileName, dirName, args.Data)
-                if err != nil {
-                    clientReply.Success = false
-                    fmt.Println("Error in writeFile in ClientAddToLog")
-                    return err
-                }
-                clientReply.Content = "" // empty reply content
-                clientReply.Success = true
-            }
             
-            entry := LogEntry{len(node.log), node.currentTerm}
+            entry := LogEntry{len(node.log), node.currentTerm, args.Data, args.CommandType}
             log.Println("Client communication created the new log entry at index " + strconv.Itoa(entry.Index))
 
             // leader: add entry to log
@@ -260,7 +242,7 @@ func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientRe
                 } else {
                     fmt.Println("checking prevLogEntry before: ", prevLogEntry)
                     //this case can be used to check if leader log is just starting, don't actually append this
-                    prevLogEntry = LogEntry{-1, -1}
+                    prevLogEntry = LogEntry{-1, -1, "", ""}
                     fmt.Println("checking prevLogEntry after: ", prevLogEntry)
                 }
 
@@ -322,7 +304,7 @@ func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientRe
                                         prevLogEntry = node.log[followerPrevLogIndex]
                                     } else{
                                         //this case can be used to check if leader log is just starting, don't actually append this
-                                        prevLogEntry = LogEntry{-1, -1}
+                                        prevLogEntry = LogEntry{-1, -1, "", ""}
                                     }
                                         
                                     // Construct arguments for AppendEntry RPC call
@@ -359,31 +341,63 @@ func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientRe
 
             fmt.Println("Initialized totalReplicated")
             node.Mutex.Lock()
-            if (len(node.log) - 1 > node.commitIndex ){
-                fmt.Printf("there is an uncommitted log")
+			fmt.Println("node commit index: ", node.commitIndex)
+            fmt.Println("length of leader log before incr totalReplicated: ", len(node.log))
+            if (len(node.log) /*- 1*/ > node.commitIndex ){
+                fmt.Println("there is an uncommitted log")
                 // there is an uncomitted entry
+                fmt.Println("node matchIndex: ", node.matchIndex)
                 for _, replicatedIndex := range node.matchIndex {
                     if (replicatedIndex >= len(node.log) -1) && node.log[len(node.log) - 1].Term == tempCurrentTerm{//node.currentTerm{
                         totalReplicated++
                     }
                 }
             }
-
+            
+			fmt.Println("totalReplicated: ", totalReplicated)
             //if majority followers have replicated
             if totalReplicated > len(node.serverNodes)/2 {
-                fmt.Printf("Leader got majority replicated logs")
+                fmt.Println("Leader got majority replicated logs")
                 node.commitIndex = len(node.log) - 1
+
+				//apply state machine
+                if args.CommandType == "R" {
+                    file, err := readFile(fileName, dirName)
+                    if err != nil {
+                        clientReply.Success = false
+                        fmt.Println("Error in readFile in ClientAddToLog: ", err)
+						node.Mutex.Unlock()
+                        return err
+                    } else {
+                        clientReply.Success = true
+                        clientReply.Content = file
+						node.lastApplied += 1 // leader log last applied incr
+						fmt.Println("successfully read file")
+                    }
+                } else if args.CommandType == "W" {
+                    err := writeFile(fileName, dirName, args.Data)
+                    if err != nil {
+                        clientReply.Success = false
+						node.Mutex.Unlock()
+                        fmt.Println("Error in writeFile in ClientAddToLog: ", err)
+                        return err
+                    } else {
+                        clientReply.Content = "" // empty reply content
+                        clientReply.Success = true
+						node.lastApplied += 1 // leader log last applied incr
+                        fmt.Println("successfully wrote file")
+                    }
+                }
             }
             node.Mutex.Unlock()
         } else {
             node.Mutex.Unlock()
             fmt.Println("This node is not the leader, don't call clientCall")
             clientReply.Success = false
-            //clientReply.LeaderID = node.leaderID
+            clientReply.LeaderID = node.leaderID
 
             //to return the address of the leader node:
-            clientReply.LeaderAddress = node.serverNodes[node.leaderID].Address
-            
+            //clientReply.LeaderAddress = node.serverNodes[node.leaderID].Address
         }
         //time.Sleep(40 * time.Millisecond) //40
         return nil
@@ -637,8 +651,8 @@ func Heartbeat(node *RaftNode, peers []ServerConnection) {
                 args := AppendEntryArgument{
                     Term:         node.currentTerm,
                     LeaderID:     node.selfID,
-                    Entries:      LogEntry{-1, -1},
-                    PrevLogEntry: LogEntry{-1, -1},
+                    Entries:      LogEntry{-1, -1, "", ""},
+                    PrevLogEntry: LogEntry{-1, -1, "", ""},
                     LeaderCommit: 0,
                 }
 

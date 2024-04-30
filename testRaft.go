@@ -10,7 +10,7 @@ import (
 )
 
 type ClientArguments struct {
-	EntityID int 
+	EntityID string
 	EntityType string // i.e. "post", "user"
 	CommandType string // "R" for read, "W" for write
 	Data string // empty for reads; data that client wants to write
@@ -73,9 +73,9 @@ func main() { // The assumption here is that the command line arguments will con
 	//client add to log
 	time.Sleep(300 * time.Millisecond)
 	clientArgs := ClientArguments{
-		EntityID: 3,
+		EntityID: "2",
 		EntityType: "user",
-		CommandType: "W",
+		CommandType: "R",
 		Data: "",
 	}
 	var clientReply ClientReply
@@ -94,8 +94,11 @@ func main() { // The assumption here is that the command line arguments will con
 		return
 	}
 
+	fmt.Println("clientReply in testRaft.go: ", clientReply)
+
 	// if clientaddtolog was called on a node that wasn't a leader, try again with the current leader
 	if !clientReply.Success {
+		fmt.Println("Client reply.Success was FALSE, retrying client request")
 		client, err := rpc.DialHTTP("tcp", serverNodes[clientReply.LeaderID].Address)
 		// If connection is not established
 		for err != nil {
@@ -109,7 +112,10 @@ func main() { // The assumption here is that the command line arguments will con
 			fmt.Printf("Error callng ClientAddToLog: %v\n", err)
 			return
 		}
-	} else{
+		fmt.Println("Successfully retried client request: ", clientReply)
+		fmt.Print("data: ", clientReply.Content)
+	} else {
+		fmt.Println("Successfully did client request: ", clientReply)
 		fmt.Println("data: ", clientReply.Content)
 	}
 }
