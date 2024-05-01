@@ -7,6 +7,7 @@ import (
 	"net/rpc"
 	"os"
 	"time"
+	"math/rand"
 )
 
 type ClientArguments struct {
@@ -29,6 +30,8 @@ type ServerConnection struct {
 	//rpcConnection *rpc.Client
 }
 
+// NOTE: [Add to report] interesting behavior - once 3 nodes are down, implementation stops working for leader
+// election because our implementation requires at least 3 nodes (majority)
 
 func main() { // The assumption here is that the command line arguments will contain:
 	// This server's ID (zero-based), location and name of the cluster configuration file
@@ -73,22 +76,28 @@ func main() { // The assumption here is that the command line arguments will con
 	//client add to log
 	time.Sleep(300 * time.Millisecond)
 	clientArgs := ClientArguments{
-		EntityID: "2",
+		EntityID: "4",
 		EntityType: "user",
-		CommandType: "R",
-		Data: "",
+		CommandType: "W",
+		Data: "user4 content",
 	}
 	var clientReply ClientReply
+	// a random integer between 0 and 4
+    i := rand.Intn(5)
+	
 	// If connection is not established
-	client, err := rpc.DialHTTP("tcp", serverNodes[0].Address)
+	client, err := rpc.DialHTTP("tcp", serverNodes[i].Address)
 	// If connection is not established
 	for err != nil {
-		// log.Println("Trying again. Connection error: ", err)
+		i = rand.Intn(5)
+		// can be the case where node is dead (leader dead for example)
+		log.Println("Trying again. Connection error: ", err)
 		// Try again!
-		client, err = rpc.DialHTTP("tcp", serverNodes[0].Address)
+		client, err = rpc.DialHTTP("tcp", serverNodes[i].Address)
 	}
 
 	err = client.Call("RaftNode.ClientAddToLog", clientArgs, &clientReply)
+	
 	if err != nil {
 		fmt.Printf("Error callng ClientAddToLog: %v\n", err)
 		return
@@ -98,7 +107,7 @@ func main() { // The assumption here is that the command line arguments will con
 
 	// if clientaddtolog was called on a node that wasn't a leader, try again with the current leader
 	if !clientReply.Success {
-		fmt.Println("Client reply.Success was FALSE, retrying client request")
+		fmt.Println("Client reply.Success was FALSE, retrying client request for node ", clientReply.LeaderID)
 		client, err := rpc.DialHTTP("tcp", serverNodes[clientReply.LeaderID].Address)
 		// If connection is not established
 		for err != nil {
