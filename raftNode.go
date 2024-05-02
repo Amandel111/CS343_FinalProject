@@ -37,7 +37,7 @@ type AppendEntryArgument struct {
     PrevLogIndex int
     PrevLogTerm  int
     LeaderCommit int
-    CommandType  string //"R", "W"
+    //CommandType  string //"R", "W"
     FileName     string // created in ClientAddToLog function
     
 }
@@ -360,6 +360,7 @@ func (node *RaftNode) ClientAddToLog(args ClientArguments, clientReply *ClientRe
             if totalReplicated > len(node.serverNodes)/2 {
                 fmt.Println("Leader got majority replicated logs")
                 node.commitIndex = len(node.log) - 1
+				fmt.Println("node.commitIndex for leader ", node.commitIndex)
 
 				//apply state machine
                 if args.CommandType == "R" {
@@ -449,6 +450,7 @@ func (node *RaftNode) AppendEntry(arguments AppendEntryArgument, reply *AppendEn
                     //this is the case where the leader just started new log
                     fmt.Println("Log is empty")
                     node.log = append(node.log, arguments.Entries)
+					fmt.Println("leader commit: ", arguments.LeaderCommit)
                     node.commitIndex = int(math.Min(float64(arguments.Entries.Index), float64(arguments.LeaderCommit)))
                     reply.Success = true
                 } else{
@@ -484,47 +486,40 @@ func (node *RaftNode) AppendEntry(arguments AppendEntryArgument, reply *AppendEn
                     fmt.Println("APPENDING SUCCEEDS FOR NODE ", node.selfID)
                     node.log = append(node.log, arguments.Entries)
                     // if follower is not up to date, its commit index will be less than leader's
+					fmt.Println("leader commit: ", arguments.LeaderCommit)
                     node.commitIndex = int(math.Min(float64(arguments.Entries.Index), float64(arguments.LeaderCommit)))
 					//run every entry up until commit index
                     reply.Success = true
-                }
+                }  
+            }
+			// for all servers (followers), apply R/W entries to state machine
 
-                // for all servers (followers), apply R/W entries to state machine
-                fmt.Println("follower node commit index: ", node.commitIndex)
-                fmt.Println("follower node last applied: ", node.lastApplied)
 				for node.commitIndex > node.lastApplied {
-                    fmt.Println("starting to apply entries to follower")
 					dirName := "CS343"
 					entry := node.log[node.lastApplied + 1] // apply new entry
-					
-					if arguments.CommandType == "R" {
+					if arguments.Entries.CommandType == "R" {
 						file, err := readFile(entry.FileName, dirName)
 						if err != nil {
 							fmt.Println("Error in readFile in ClientAddToLog: ", err)
 							//node.Mutex.Unlock()
 							return err
 						} else {
-							//clientReply.Success = true
-							//clientReply.Content = file
+
 							node.lastApplied += 1 // follower last applied incr
 							fmt.Println("successfully read file: ", file)
 						}
-					} else if arguments.CommandType == "W" {
+					} else if arguments.Entries.CommandType == "W" {
 						err := writeFile(entry.FileName, dirName, entry.Data)
 						if err != nil {
-							//clientReply.Success = false
-							//node.Mutex.Unlock()
+
 							fmt.Println("Error in writeFile in ClientAddToLog: ", err)
 							return err
 						} else {
-							//clientReply.Content = "" // empty reply content
-							//clientReply.Success = true
 							node.lastApplied += 1 // follower last applied incr
 							fmt.Println("successfully wrote file")
 						}
 					}
 				}
-            }
     }
 }
     return nil
